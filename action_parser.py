@@ -275,7 +275,7 @@ def parse_action_to_structure_output(text,
         })
     return actions
 
-
+# TODO: This function's output is not compatible with all OS system, for example, on Mac, it should use command + v instead of ctrl + v
 def parsing_response_to_pyautogui_code(responses,
                                        image_height: int,
                                        image_width: int,
@@ -411,7 +411,7 @@ def parsing_response_to_pyautogui_code(responses,
                 if input_swap:
                     pyautogui_code += f"\nimport pyperclip"
                     pyautogui_code += f"\npyperclip.copy('{stripped_content}')"
-                    pyautogui_code += f"\npyautogui.hotkey('ctrl', 'v')"
+                    pyautogui_code += f"\npyautogui.hotkey('command', 'v', interval=0.1)"
                     pyautogui_code += f"\ntime.sleep(0.5)\n"
                     if content.endswith("\n") or content.endswith("\\n"):
                         pyautogui_code += f"\npyautogui.press('enter')"

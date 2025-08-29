@@ -58,3 +58,23 @@ finished(content='xxx') # Use escape characters \\', \\", and \\n in content par
 
 GROUNDING_DOUBAO = """You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action to complete the task. \n\n## Output Format\n\nAction: ...\n\n\n## Action Space\nclick(point='<point>x1 y1</point>'')\n\n## User Instruction
 {instruction}"""
+
+
+RESULT_CHECKING_PROMPT = """You are a GUI agent. You are given a task description, a expected result description and a screenshot showing the current state. You need to determine if the task has been completed.
+
+## Output Format
+```
+Thought: ...
+Action: finished(content='xxx')
+```
+
+## Note
+- You are "determining" if the task is finished or not, NOT "thinking" how to finish the task.
+- The content of `finished(content='xxx')` should be only 'true' or 'false' to indicate the current state of the task is finished or not. 'true' means the task is finished, 'false' means the task is not finished.
+- You only allow to use finished(content='xxx') in the Action part of the output format. No other actions are allowed.
+
+## Task Description
+{task_description}
+
+## Expected Result Description
+{expected_result_description}"""
