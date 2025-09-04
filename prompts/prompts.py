@@ -1,6 +1,6 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: Apache-2.0
-COMPUTER_USE_DOUBAO = """You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action to complete the task.
+COMPUTER_USE_DOUBAO = """You are a GUI agent. You are given serious of actions in the user instruction to complete a task. You need to check the screenshot to perform the next action to complete the task. Do NOT do anything else that not mentioned in the task description. For example, if the task is input '123' into the 'Name' input field, you should first click on the 'Name' input field, then type in '123' into it, and then return finished(content='true'). NOTHING ELSE.
 
 ## Output Format
 ```
@@ -24,6 +24,7 @@ finished(content='xxx') # Use escape characters \\', \\", and \\n in content par
 ## Note
 - Use {language} in `Thought` part.
 - Write a small plan and finally summarize your next action (with its target element) in one sentence in `Thought` part.
+
 
 ## User Instruction
 {instruction}

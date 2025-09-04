@@ -25,7 +25,7 @@ os.environ["TGI_BASE_URL"] = os.getenv("TGI_BASE_URL") or ""
 
 MODEL_IMG_WIDTH, MODEL_IMG_HEIGHT = 3360, 2100
 RESIZED_MODEL_IMG_WIDTH, RESIZED_MODEL_IMG_HEIGHT = 2880, 1800
-SCREEN_WIDTH, SCREEN_HEIGHT = 1680, 1050
+SCREEN_WIDTH, SCREEN_HEIGHT = 1920, 1080
 FACTOR = 28
 
 
@@ -292,12 +292,11 @@ async def run_docker_container(image_name: str):
 
     # 3) Open the browser
     _ = await computer.interface.run_command(
-        "bash -lc 'nohup xdg-open https://www.brmsprovidergateway.com/provideronline/search.aspx "
-        ">/dev/null 2>&1 </dev/null &'"
+        f"""bash -lc 'nohup xdg-open https://www.brmsprovidergateway.com/provideronline/search.aspx >/dev/null 2>&1 </dev/null & sleep 2 && xdotool search --name "Provider" windowactivate windowsize 100% 100%'"""
     )
     time.sleep(5)
 
-    return computer, image_width, image_height, screen_width, screen_height
+    return computer, image_width, image_height, SCREEN_WIDTH, SCREEN_HEIGHT
 
 async def demo_docker_cua_step_automation(instruction: str, computer: Computer, image_width: int, image_height: int, screen_width: int, screen_height: int, step_idx: int, max_iterations: int = 5):
     """
@@ -363,11 +362,20 @@ async def demo_docker_cua_step_automation(instruction: str, computer: Computer, 
             print("Executing PyAutoGUI code...")
             await computer.interface.write_text("/tmp/my_script.py", pyautogui_code)
             result = await computer.interface.run_command(
-                    "bash -lc 'timeout 15s python3 /tmp/my_script.py; rc=$?; pkill -f xclip || true; pkill -f xsel || true; echo __RC__$rc'"
-                )
+                "bash -lc 'timeout -s TERM -k 5s 15s python3 /tmp/my_script.py > /tmp/my_script.log 2>&1; echo $? > /tmp/my_script.rc; pkill -f xclip || true; pkill -f xsel || true'"
+            )
             print(f"Script executed with return code: {result.returncode}")
-            print(f"STDOUT: {result.stdout}")
-            print(f"STDERR: {result.stderr}")
+            try:
+                rc_text = await computer.interface.read_text("/tmp/my_script.rc")
+                print(f"Snippet RC: {rc_text.strip()}")
+            except Exception as _e:
+                print(f"Failed to read snippet RC: {_e}")
+            try:
+                log_text = await computer.interface.read_text("/tmp/my_script.log")
+                if log_text:
+                    print("SNIPPET LOG:\n" + log_text)
+            except Exception as _e:
+                print(f"Failed to read snippet log: {_e}")
 
             # 7) Visualize the actions using current image
             output_path = f"./data/screenshots/automation_step_{step_idx}_{iteration + 1}.png"
@@ -415,17 +423,77 @@ async def main():
     #     ]
     test_instructions_v2 = [
                 "I need to click on the 'Member ID' input field and type in 'E01257444' into it.",\
-                "I need to click on the 'Month/MM' input field and type in '11' into it.",\
-                "I need to click on the 'Day/DD' input field and type in '01' into it.",\
-                "I need to click on the 'Year/YYYY' input field and type in '1992' into it.",\
+                "I need to click on the 'MM' input field and type in '11' into it.",\
+                "I need to click on the 'DD' input field and type in '01' into it.",\
+                "I need to click on the 'YYYY' input field and type in '1992' into it.",\
                 "I need to click on the 'Search' button and click on 'Benefit Details'.",\
-                "I need to click on the dropdown date range to open the file save dialog.",\
-                "I need to click on the 'save' button to save the file.",\
+                "I need to click on the dropdown date range to save the file.",\
             ]
     computer, image_width, image_height, screen_width, screen_height = await run_docker_container(image_name="cua-browser-ubuntu:latest")
-    for i in range(len(test_instructions_v2)):
-        await demo_docker_cua_step_automation(test_instructions_v2[i], computer, image_width, image_height, screen_width, screen_height, step_idx=i+1, max_iterations=3)
-    
+    print("--------------------------------")
+    print("Running docker container")
+    print(f"Image width: {image_width}, Image height: {image_height}, Screen width: {screen_width}, Screen height: {screen_height}")
+
+    #########################################################
+    # # FIRST LOOP to generate the automation code snippets
+    # for i in range(len(test_instructions_v2)):
+    #     await demo_docker_cua_step_automation(test_instructions_v2[i], computer, image_width, 
+    #     image_height, screen_width, screen_height, step_idx=i+1, max_iterations=5)
+    # print("--------------------------------")
+
+    #########################################################
+
+    #########################################################
+
+    # Test code integration inside the container (assumes automation snippets already exist)
+    script = call_code_integration_model_from_dir("./data/automation_code")
+    print(script)
+    script = script.replace("```python", "").replace("```", "")
+
+    print("--------------------------------")
+    print("Executing integrated script inside container...")
+    await computer.interface.write_text("/tmp/integrated_script.py", script)
+    result = await computer.interface.run_command(
+        "bash -lc 'timeout -s TERM -k 5s 60s python3 /tmp/integrated_script.py > /tmp/integrated_script.log 2>&1; echo $? > /tmp/integrated_script.rc; pkill -f xclip || true; pkill -f xsel || true'"
+    )
+    print(f"Integrated script return code: {result.returncode}")
+    try:
+        rc_text = await computer.interface.read_text("/tmp/integrated_script.rc")
+        print(f"Integrated script RC: {rc_text.strip()}")
+    except Exception as _e:
+        print(f"Failed to read integrated script RC: {_e}")
+    try:
+        log_text = await computer.interface.read_text("/tmp/integrated_script.log")
+        if log_text:
+            print("INTEGRATED SCRIPT LOG:\n" + log_text)
+    except Exception as _e:
+        print(f"Failed to read integrated script log: {_e}")
+
+    # After execution: take current screenshot from container, load expected end image, and check result
+    try:
+        screenshot_bytes = await computer.interface.screenshot()
+        current_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+
+        expected_path = './data/test_images/test_img_13.png'
+        expected_image = Image.open(expected_path)
+        _buf = BytesIO()
+        expected_image.save(_buf, format="PNG")
+        expected_b64 = base64.b64encode(_buf.getvalue()).decode()
+
+        task_description = "Log in to the insurance portal and download the benefits details file."
+        check = call_result_checking_model(
+            task_description=task_description,
+            expected_view_base64=expected_b64,
+            current_view_base64=current_b64,
+        )
+        print("=== Result Checking ===")
+        print(f"Thoughts: {check.get('thoughts', '')}")
+        print(f"Finished: {check.get('result', False)}")
+    except Exception as e:
+        print(f"Result checking failed: {e}")
+
+    #########################################################
+
     await computer.stop()
 
     # # Test code integration
