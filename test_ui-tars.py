@@ -1,4 +1,5 @@
 # pip install openai
+import asyncio
 import io
 import os
 import re
@@ -10,9 +11,11 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 from openai import OpenAI
 from dotenv import load_dotenv
+from computer import Computer
+
 from action_parser import add_box_token, parse_action_to_structure_output, parsing_response_to_pyautogui_code, smart_resize, parse_action, convert_point_to_coordinates
-from utils import visualize_actions_on_image, execute_pyautogui_code, get_screenshot_base64
-from core import call_ui_grounding_model, call_result_checking_model, AutomationState, build_messages_with_state, call_ui_grounding_model_with_messages
+from utils import visualize_actions_on_image, execute_pyautogui_code, get_screenshot_base64, get_size_from_base64
+from core import call_ui_grounding_model, call_result_checking_model, AutomationState, build_messages_with_state, call_ui_grounding_model_with_messages, call_code_integration_model_from_dir
 
 load_dotenv()
 os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN") or ""
@@ -116,14 +119,14 @@ def run_images_testing():
 
         # break
 
-def demo_continuous_automation(instruction: str, step_idx: int, max_iterations: int = 5):
+def demo_local_cua_step_automation(instruction: str, step_idx: int, max_iterations: int = 5):
     """
     Demo function showing continuous automation with short history:
     - At most two images per model call (previous + current)
     - Last two actions as text for reasoning
     - Early stop when model emits finished
     """
-    print(f"=== Starting Step {step_idx} ===")
+    print(f"=== Step {step_idx} Started ===")
     print(f"Instruction: {instruction}")
     print(f"Max iterations: {max_iterations}")
 
@@ -141,7 +144,6 @@ def demo_continuous_automation(instruction: str, step_idx: int, max_iterations: 
             messages = build_messages_with_state(state, cur_b64)
             print("Calling UI grounding model with history...")
             raw_response = call_ui_grounding_model_with_messages(messages)
-            print(f"Model response received: {raw_response[:160]}...")
 
             # 3) Parse the response into actions
             structured_actions = parse_action_to_structure_output(
@@ -150,7 +152,6 @@ def demo_continuous_automation(instruction: str, step_idx: int, max_iterations: 
                 origin_resized_height=RESIZED_MODEL_IMG_HEIGHT,
                 origin_resized_width=RESIZED_MODEL_IMG_WIDTH
             )
-            print(f"Parsed {len(structured_actions)} actions")
 
             # 4) Early stop if finished
             if any(a.get("action_type") == "finished" for a in structured_actions):
@@ -163,10 +164,15 @@ def demo_continuous_automation(instruction: str, step_idx: int, max_iterations: 
                 image_height=SCREEN_HEIGHT,
                 image_width=SCREEN_WIDTH
             )
-            print("--------------------------------")
-            print("Generated PyAutoGUI code")
-            print(pyautogui_code)
-            print("--------------------------------")
+            # print("--------------------------------")
+            # print("Generated PyAutoGUI code")
+            # print(pyautogui_code)
+            # print("--------------------------------")
+
+            # Save every pyautogui code to a file for debugging
+            os.makedirs("./data/automation_code", exist_ok=True)
+            with open(f"./data/automation_code/automation_step_{step_idx}_{iteration + 1}.py", "w") as f:
+                f.write(pyautogui_code)
 
             # 6) Execute code unless parser signaled DONE
             if pyautogui_code == "DONE":
@@ -183,7 +189,7 @@ def demo_continuous_automation(instruction: str, step_idx: int, max_iterations: 
                 # break
 
             # 7) Visualize the actions using current image
-            output_path = f"./data/screenshots/automation_step_{iteration + 1}.png"
+            output_path = f"./data/screenshots/automation_step_{step_idx}_{iteration + 1}.png"
             visualize_actions_on_image(
                 image=cur_b64,
                 structured_actions=structured_actions,
@@ -207,9 +213,9 @@ def demo_continuous_automation(instruction: str, step_idx: int, max_iterations: 
             print(f"Error in iteration {iteration + 1}: {str(e)}")
             break
 
-    print("\n=== Step Complete ===")
+    print("\n=== Step Ended ===")
 
-def demo_result_checking():
+def demo_local_result_checking():
     """
     Demo function showing result checking: screenshot -> model -> result checking
     """
@@ -259,8 +265,138 @@ def demo_result_checking():
         result = call_result_checking_model(cur_test_instruction, expected_result_descriptions[i], finished_img_str)
         print(f"{result}")
 
+async def run_docker_container(image_name: str):
+    # 0) Run the docker container and get the screen size and screenshot size
+    computer = Computer(
+        os_type="linux",
+        provider_type="docker",
+        image=image_name,
+        name="my-cua-container",
+        noVNC_port=6901,
+        port=8000
+    )
 
-if __name__ == "__main__":
+    await computer.run()
+
+    print("VNC Access: http://localhost:6901")
+    print("API: http://localhost:8000")
+
+    # 1) Get the screenshot size and screen size
+    screenshot_bytes = await computer.interface.screenshot()
+    screenshot_size = get_size_from_base64(screenshot_bytes)
+    image_width, image_height = screenshot_size[0], screenshot_size[1]
+    
+    # 2) Get the screen size for pyautogui execution
+    screen_size = await computer.interface.get_screen_size()
+    screen_width, screen_height = screen_size['width'], screen_size['height']
+
+    # 3) Open the browser
+    _ = await computer.interface.run_command(
+        "bash -lc 'nohup xdg-open https://www.brmsprovidergateway.com/provideronline/search.aspx "
+        ">/dev/null 2>&1 </dev/null &'"
+    )
+    time.sleep(5)
+
+    return computer, image_width, image_height, screen_width, screen_height
+
+async def demo_docker_cua_step_automation(instruction: str, computer: Computer, image_width: int, image_height: int, screen_width: int, screen_height: int, step_idx: int, max_iterations: int = 5):
+    """
+    Demo function showing continuous automation with short history inside the docker container:
+    - At most two images per model call (previous + current)
+    - Last two actions as text for reasoning
+    - Early stop when model emits finished
+    """
+    print(f"=== Step {step_idx} Started ===")
+    print(f"Instruction: {instruction}")
+    print(f"Max iterations: {max_iterations}")
+
+    state = AutomationState(instruction=instruction, language="English")
+
+    for iteration in range(max_iterations):
+        print(f"\n--- Iteration {iteration + 1} ---")
+        try:
+            # 1) Capture current screenshot inside the docker container
+            print("Capturing screenshot...")
+            screenshot_bytes = await computer.interface.screenshot()
+            cur_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+            print("Screenshot captured and converted to base64")
+
+            # 2) Build messages (<=2 images) and call model
+            messages = build_messages_with_state(state, cur_b64)
+            print("Calling UI grounding model with history...")
+            raw_response = call_ui_grounding_model_with_messages(messages)
+
+            # 3) Parse the response into actions
+            structured_actions = parse_action_to_structure_output(
+                raw_response,
+                factor=FACTOR,
+                origin_resized_height=image_height,
+                origin_resized_width=image_width
+            )
+
+            # 4) Early stop if finished
+            if any(a.get("action_type") == "finished" for a in structured_actions):
+                print("Task completed (model emitted finished).")
+                break
+
+            # 5) Generate PyAutoGUI code
+            pyautogui_code = parsing_response_to_pyautogui_code(
+                structured_actions,
+                image_height=screen_height,
+                image_width=screen_width
+            )
+            print("--------------------------------")
+            print("Generated PyAutoGUI code")
+            print(pyautogui_code)
+            print("--------------------------------")
+
+            # Save every pyautogui code to a file for debugging
+            os.makedirs("./data/automation_code", exist_ok=True)
+            with open(f"./data/automation_code/automation_step_{step_idx}_{iteration + 1}.py", "w") as f:
+                f.write(pyautogui_code)
+
+            # 6) Execute code unless parser signaled DONE
+            if pyautogui_code == "DONE":
+                print("Task completed (parser signals DONE).")
+                break
+
+            print("Executing PyAutoGUI code...")
+            await computer.interface.write_text("/tmp/my_script.py", pyautogui_code)
+            result = await computer.interface.run_command(
+                    "bash -lc 'timeout 15s python3 /tmp/my_script.py; rc=$?; pkill -f xclip || true; pkill -f xsel || true; echo __RC__$rc'"
+                )
+            print(f"Script executed with return code: {result.returncode}")
+            print(f"STDOUT: {result.stdout}")
+            print(f"STDERR: {result.stderr}")
+
+            # 7) Visualize the actions using current image
+            output_path = f"./data/screenshots/automation_step_{step_idx}_{iteration + 1}.png"
+            visualize_actions_on_image(
+                image=cur_b64,
+                structured_actions=structured_actions,
+                output_path=output_path,
+                title=f"Automation Step {iteration + 1}: {instruction[:30]}..."
+            )
+            print(f"Actions visualized and saved to: {output_path}")
+
+            # 8) Save step memory (previous image + last action summary)
+            thought = structured_actions[0].get("thought", "") if structured_actions else ""
+            first = structured_actions[0] if structured_actions else {"action_type": "", "action_inputs": {}}
+            action_str = f"{first['action_type']}(" + ", ".join(
+                f"{k}='{v}'" for k, v in first.get("action_inputs", {}).items()
+            ) + ")"
+            state.add_step(before_image_b64=cur_b64, thought=thought, action_str=action_str)
+
+            # Short settle time
+            time.sleep(1.0)
+
+        except Exception as e:
+            print(f"Error in iteration {iteration + 1}: {str(e)}")
+            break
+
+    print("\n=== Step Ended ===")
+
+async def main():
     # run_images_testing()
 
     # test_instructions_v1 = [
@@ -286,7 +422,44 @@ if __name__ == "__main__":
                 "I need to click on the dropdown date range to open the file save dialog.",\
                 "I need to click on the 'save' button to save the file.",\
             ]
-    
+    computer, image_width, image_height, screen_width, screen_height = await run_docker_container(image_name="cua-browser-ubuntu:latest")
     for i in range(len(test_instructions_v2)):
-        demo_continuous_automation(test_instructions_v2[i], step_idx=i+1, max_iterations=3)
-    # demo_result_checking()
+        await demo_docker_cua_step_automation(test_instructions_v2[i], computer, image_width, image_height, screen_width, screen_height, step_idx=i+1, max_iterations=3)
+    
+    await computer.stop()
+
+    # # Test code integration
+    # script = call_code_integration_model_from_dir("./data/automation_code")
+    # print(script)
+    # script = script.replace("```python", "").replace("```", "")
+
+    # # Test integrated code execution
+    # success, result = execute_pyautogui_code(script)
+    # if success:
+    #     print("Integrated code executed successfully")
+    # else:
+    #     print(f"Failed to execute integrated code: {result}")
+
+    # # After execution: take current screenshot, load expected end image, and check result
+    # try:
+    #     current_b64 = get_screenshot_base64(width=RESIZED_MODEL_IMG_WIDTH, height=RESIZED_MODEL_IMG_HEIGHT)
+    #     expected_path = './data/test_images/test_img_13.png'
+    #     expected_image = Image.open(expected_path)
+    #     _buf = BytesIO()
+    #     expected_image.save(_buf, format="PNG")
+    #     expected_b64 = base64.b64encode(_buf.getvalue()).decode()
+
+    #     task_description = "Log in to the insurance portal and download the benefits details file."
+    #     check = call_result_checking_model(
+    #         task_description=task_description,
+    #         expected_view_base64=expected_b64,
+    #         current_view_base64=current_b64,
+    #     )
+    #     print("=== Result Checking ===")
+    #     print(f"Thoughts: {check.get('thoughts', '')}")
+    #     print(f"Finished: {check.get('result', False)}")
+    # except Exception as e:
+    #     print(f"Result checking failed: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())

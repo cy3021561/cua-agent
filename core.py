@@ -1,6 +1,13 @@
 import os
 from openai import OpenAI
-from prompts.prompts import COMPUTER_USE_DOUBAO, RESULT_CHECKING_PROMPT
+from prompts.prompts import COMPUTER_USE_DOUBAO
+from prompts.prompts import RESULT_CHECKING_WITH_IMAGES_PROMPT
+from prompts.prompts import CODE_INTEGRATION_PROMPT
+from typing import List
+import glob
+import pathlib
+import json
+import re
  
 
 
@@ -129,57 +136,46 @@ def call_ui_grounding_model(base64_image: str, instruction: str, language: str =
 
     return raw_response
 
-# TODO: Should we add a expected result description to the prompt?
-def call_result_checking_model(task_description: str, expected_result_description: str, current_screenshot_base64: str) -> bool:
+def call_result_checking_model(task_description: str, expected_view_base64: str, current_view_base64: str) -> dict:
     """
-    Call a vlm model(e.g. gpt-4o sereis or still using UI-TARS model) with current screenshot to check if the task in task_description is finished.
+    Determine if a task is finished by comparing an expected end-state image and the current image.
 
     Args:
-        task_description: The description of the task to be checked
-        current_screenshot_base64: The base64 encoded current screenshot
+        task_description: The description of the task to be checked.
+        expected_view_base64: Base64 of the expected end-state screenshot (PNG).
+        current_view_base64: Base64 of the current screenshot (PNG).
 
     Returns:
-        bool: True if the task is finished, False otherwise
+        dict: {"thoughts": str, "result": bool}
     """
-    print(f"Calling result checking model with task description: {task_description}")
-    print(f"Expected result description: {expected_result_description}")
-    # client = OpenAI(
-    #     api_key=os.environ["OPENAI_API_KEY"]
-    # )
     client = OpenAI(
-        base_url=os.environ["TGI_BASE_URL"],
-        api_key=os.environ["HF_TOKEN"]
+        api_key=os.environ["OPENAI_API_KEY"]
     )
-    
+
+    instruction = RESULT_CHECKING_WITH_IMAGES_PROMPT.format(task_description=task_description)
+
     messages = [
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": RESULT_CHECKING_PROMPT.format(task_description=task_description, expected_result_description=expected_result_description)
-                }
+                {"type": "text", "text": instruction}
             ]
-        }
-    ]
-
-    messages.append(
+        },
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "Before image:"
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{current_screenshot_base64}"
-                    }
-                }
+                {"type": "text", "text": "Expected end view:"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{expected_view_base64}"}},
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Current view:"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_view_base64}"}},
             ]
         }
-    )
+    ]
 
     chat_completion = client.chat.completions.create(
         model="gpt-4o",
@@ -187,8 +183,91 @@ def call_result_checking_model(task_description: str, expected_result_descriptio
         temperature=0.0,
     )
 
-    # Get the complete response
-    raw_response = chat_completion.choices[0].message.content
-    # print(f"Raw response: {raw_response}")
+    raw_response = chat_completion.choices[0].message.content or ""
 
+    thoughts_match = re.search(r"Thought:\s*(.*?)(?:\n\s*Action:|\Z)", raw_response, flags=re.DOTALL | re.IGNORECASE)
+    thoughts = thoughts_match.group(1).strip() if thoughts_match else raw_response.strip()
+
+    result_match = re.search(r"finished\(content=['\"]?(true|false)['\"]?\)", raw_response, flags=re.IGNORECASE)
+    result_str = result_match.group(1).lower() if result_match else "false"
+    result_bool = True if result_str == "true" else False
+
+    return {"thoughts": thoughts, "result": result_bool}
+
+
+def _load_automation_step_snippets(snippets_dir: str = "./data/automation_code") -> List[str]:
+    """
+    Load all Python code snippets from the automation steps directory, sorted by filename.
+
+    Args:
+        snippets_dir: Directory that contains step files like automation_step_*.py
+
+    Returns:
+        List[str]: List of code snippet strings in filename order
+    """
+    # Resolve absolute path while allowing default relative usage
+    dir_path = pathlib.Path(snippets_dir).resolve()
+    pattern = str(dir_path / "automation_step_*.py")
+    files = sorted(glob.glob(pattern))
+    snippets: List[str] = []
+    for file_path in files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                snippets.append(f.read())
+        except Exception:
+            # Skip unreadable files; we want best-effort aggregation
+            continue
+    return snippets
+
+
+def call_code_integration_model_with_snippets(snippets: List[str]) -> str:
+    """
+    Call gpt-4o with CODE_INTEGRATION_PROMPT and provided snippets to generate a unified PyAutoGUI script.
+
+    Args:
+        snippets: List of code snippet strings composing the task steps.
+
+    Returns:
+        str: The model's raw response, expected to be a complete PyAutoGUI script.
+    """
+    client = OpenAI(
+        api_key=os.environ["OPENAI_API_KEY"]
+    )
+
+    # Join snippets with clear boundaries to help the model
+    joined_snippets = "\n\n# ===== SNIPPET SEPARATOR =====\n\n".join(snippets)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": CODE_INTEGRATION_PROMPT.format(code_snippets=joined_snippets)
+                }
+            ]
+        }
+    ]
+
+    chat_completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.0,
+    )
+
+    raw_response = chat_completion.choices[0].message.content
     return raw_response
+
+
+def call_code_integration_model_from_dir(snippets_dir: str = "./data/automation_code") -> str:
+    """
+    Convenience wrapper that loads snippets from a directory and calls the integration model.
+
+    Args:
+        snippets_dir: Directory containing automation step files.
+
+    Returns:
+        str: The model's raw response, expected to be a complete PyAutoGUI script.
+    """
+    snippets = _load_automation_step_snippets(snippets_dir)
+    return call_code_integration_model_with_snippets(snippets)

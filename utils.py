@@ -5,9 +5,34 @@ import sys
 import tempfile
 from typing import Optional, Tuple, Union
 import time
+import base64
+import io
+from PIL import Image
 
+def get_size_from_base64(b64_or_bytes: Union[str, bytes]) -> tuple[int, int]:
+    """
+    Return (width, height) for an image provided as base64 string or raw bytes.
 
-def visualize_actions_on_image(image: Union['PIL.Image.Image', str], structured_actions: list, output_path: str, title: Optional[str] = None, dpi: int = 350) -> None:
+    Accepts:
+    - base64 string (optionally with data URL prefix like 'data:image/png;base64,')
+    - raw image bytes
+    """
+    if isinstance(b64_or_bytes, (bytes, bytearray)):
+        data = bytes(b64_or_bytes)
+    else:
+        s = b64_or_bytes.strip()
+        # Strip data URL prefix if present
+        if s.startswith('data:image'):
+            comma_idx = s.find(',')
+            if comma_idx != -1:
+                s = s[comma_idx + 1 :]
+        # Be permissive here; some producers insert newlines or lack proper padding
+        data = base64.b64decode(s, validate=False)
+
+    with Image.open(io.BytesIO(data)) as im:
+        return im.size  # (width, height)
+
+def visualize_actions_on_image(image: Union['Image.Image', str], structured_actions: list, output_path: str, title: Optional[str] = None, dpi: int = 350) -> None:
     """
     Visualize structured actions on an image and save it.
 
@@ -73,7 +98,7 @@ def visualize_actions_on_image(image: Union['PIL.Image.Image', str], structured_
                         x = int(coord_values[0] * image_width)
                         y = int(coord_values[1] * image_height)
                         coordinates.append((x, y))
-                        print(f"    Parsed {param_name}: coord_values={coord_values}, pixel_coords=({x}, {y})")
+                        # print(f"Parsed {param_name}: coord_values={coord_values}, pixel_coords=({x}, {y})")
                         has_coordinates = True
                         
                         # Choose color based on parameter type
@@ -100,7 +125,7 @@ def visualize_actions_on_image(image: Union['PIL.Image.Image', str], structured_
                                    bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
                                    fontsize=8, fontweight='bold')
                         
-                        print(f"  Drawn coordinate: ({x}, {y}) for {action_type} ({param_name})")
+                        # print(f"Drawn coordinate: ({x}, {y}) for {action_type} ({param_name})")
                         
                 except (ValueError, AttributeError, TypeError) as e:
                     print(f"Error parsing coordinates for {param_name}: {param_value}, Error: {e}")
@@ -115,7 +140,7 @@ def visualize_actions_on_image(image: Union['PIL.Image.Image', str], structured_
                 plt.annotate('drag path', ((start_x + end_x)/2, (start_y + end_y)/2), 
                            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8),
                            fontsize=7)
-                print(f"  Drawn drag line from ({start_x}, {start_y}) to ({end_x}, {end_y})")
+                # print(f"Drawn drag line from ({start_x}, {start_y}) to ({end_x}, {end_y})")
         
         # If no coordinates found, add text annotation for the action
         if not has_coordinates:
@@ -149,7 +174,7 @@ def visualize_actions_on_image(image: Union['PIL.Image.Image', str], structured_
                         bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8),
                         fontsize=9, fontweight='bold')
             
-            print(f"  Added text annotation: {action_text}")
+            # print(f"  Added text annotation: {action_text}")
     
     # Set title
     if title:
@@ -168,7 +193,7 @@ def visualize_actions_on_image(image: Union['PIL.Image.Image', str], structured_
     plt.savefig(output_path, dpi=dpi)
     plt.close()
     
-    print(f"Visualization saved to: {output_path}")
+    # print(f"Visualization saved to: {output_path}")
 
 
 def execute_pyautogui_code(code: str, timeout: int = 30) -> Tuple[bool, str]:

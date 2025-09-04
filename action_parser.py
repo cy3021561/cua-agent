@@ -411,7 +411,7 @@ def parsing_response_to_pyautogui_code(responses,
                 if input_swap:
                     pyautogui_code += f"\nimport pyperclip"
                     pyautogui_code += f"\npyperclip.copy('{stripped_content}')"
-                    pyautogui_code += f"\npyautogui.hotkey('command', 'v', interval=0.1)"
+                    pyautogui_code += f"\npyautogui.hotkey('ctrl', 'v', interval=0.1)"
                     pyautogui_code += f"\ntime.sleep(0.5)\n"
                     if content.endswith("\n") or content.endswith("\\n"):
                         pyautogui_code += f"\npyautogui.press('enter')"
@@ -492,6 +492,9 @@ def parsing_response_to_pyautogui_code(responses,
 
         elif action_type in ["finished"]:
             pyautogui_code = f"DONE"
+        
+        elif action_type in ["wait"]:
+            pyautogui_code += f"\ntime.sleep({action_inputs.get('time', 1)})"
 
         else:
             pyautogui_code += f"\n# Unrecognized action type: {action_type}"

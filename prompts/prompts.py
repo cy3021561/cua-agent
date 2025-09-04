@@ -59,22 +59,30 @@ finished(content='xxx') # Use escape characters \\', \\", and \\n in content par
 GROUNDING_DOUBAO = """You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action to complete the task. \n\n## Output Format\n\nAction: ...\n\n\n## Action Space\nclick(point='<point>x1 y1</point>'')\n\n## User Instruction
 {instruction}"""
 
+CODE_INTEGRATION_PROMPT = """You are a GUI agent specific to generating PyAutoGUI code. You are given a series of code snippets of each step of the task. You need to integrate the code snippets into one complete and executable code for the entire task.
 
-RESULT_CHECKING_PROMPT = """You are a GUI agent. You are given a task description, a expected result description and a screenshot showing the current state. You need to determine if the task has been completed.
+## Code Snippets
+{code_snippets}
+
+## Note
+- You should only output the complete and executable code for the entire task. No other text are allowed.
+- Some part of the step code might be redundant or overlapped, you should filter out the redundant code and make the code as short as possible.
+- You should insert a `time.sleep(2.0)` after each action to ensure the action is executed successfully.
+"""
+
+RESULT_CHECKING_WITH_IMAGES_PROMPT = """You are a GUI agent. You are given a task description, an expected end-state screenshot, and a current screenshot. You need to determine if the task has been completed.
 
 ## Output Format
 ```
 Thought: ...
-Action: finished(content='xxx')
+Action: finished(content='true' or 'false')
 ```
 
 ## Note
-- You are "determining" if the task is finished or not, NOT "thinking" how to finish the task.
-- The content of `finished(content='xxx')` should be only 'true' or 'false' to indicate the current state of the task is finished or not. 'true' means the task is finished, 'false' means the task is not finished.
+- You are determining if the task is finished or not, NOT planning how to finish the task.
+- The content of `finished(content='xxx')` must be exactly 'true' or 'false'.
 - You only allow to use finished(content='xxx') in the Action part of the output format. No other actions are allowed.
 
 ## Task Description
 {task_description}
-
-## Expected Result Description
-{expected_result_description}"""
+"""
